@@ -18,11 +18,9 @@ router.post('/login', loginLimiter, async (req, res) => {
   const { username, password } = req.body;
   if (!password) return res.status(400).json({ error: 'Contraseña requerida' });
 
-  // Si no hay username, intentar con el admin legacy (compatibilidad)
   const uname = username || 'admin';
 
   try {
-    // Buscar usuario en Firestore
     const snap = await db.collection('cpanel_users')
       .where('username', '==', uname)
       .limit(1)
@@ -31,19 +29,19 @@ router.post('/login', loginLimiter, async (req, res) => {
     let user;
 
     if (!snap.empty) {
-      // Usuario en Firestore
       const doc = snap.docs[0];
       user = { id: doc.id, ...doc.data() };
       if (user.password !== password) {
         return res.status(403).json({ error: 'Usuario o contraseña incorrectos' });
       }
     } else if (uname === 'admin' && password === process.env.ADMIN_SECRET) {
-      // Fallback: admin legacy del .env
       user = {
         id: 'admin',
         username: 'admin',
         role: 'admin',
-        permissions: ['dashboard', 'categorias', 'productos', 'pedidos', 'usuarios']
+        permissions: ['dashboard', 'categorias', 'productos', 'pedidos', 'usuarios'],
+        storeId: '',
+        storeName: ''
       };
     } else {
       return res.status(403).json({ error: 'Usuario o contraseña incorrectos' });
@@ -53,7 +51,9 @@ router.post('/login', loginLimiter, async (req, res) => {
       userId: user.id,
       username: user.username,
       role: user.role || 'operator',
-      permissions: user.permissions || ['pedidos']
+      permissions: user.permissions || ['pedidos'],
+      storeId: user.storeId || '',
+      storeName: user.storeName || ''
     };
 
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: `${SESSION_HOURS}h` });

@@ -22,7 +22,7 @@ router.get('/', requireAdmin, async (req, res, next) => {
 // POST /api/users – admin – crear usuario
 router.post('/', requireAdmin, async (req, res, next) => {
   try {
-    const { username, password, role = 'operator', permissions = ['pedidos'] } = req.body;
+    const { username, password, role = 'operator', permissions = ['pedidos'], storeId, storeName } = req.body;
     if (!username || !password) {
       return res.status(400).json({ error: 'username y password son requeridos' });
     }
@@ -33,14 +33,17 @@ router.post('/', requireAdmin, async (req, res, next) => {
     }
     // Validate permissions
     const validPerms = permissions.filter(p => ALL_PERMISSIONS.includes(p));
-    const docRef = await db.collection(COL).add({
+    const userData = {
       username,
       password, // plain text (same as existing ADMIN_SECRET pattern)
       role: role === 'admin' ? 'admin' : 'operator',
       permissions: validPerms,
+      storeId: storeId || null,
+      storeName: storeName || null,
       createdAt: new Date().toISOString()
-    });
-    res.status(201).json({ id: docRef.id, username, role, permissions: validPerms });
+    };
+    const docRef = await db.collection(COL).add(userData);
+    res.status(201).json({ id: docRef.id, username, role, permissions: validPerms, storeId: storeId || null, storeName: storeName || null });
   } catch (err) { next(err); }
 });
 
@@ -57,6 +60,9 @@ router.put('/:id', requireAdmin, async (req, res, next) => {
     if (req.body.permissions) {
       update.permissions = req.body.permissions.filter(p => ALL_PERMISSIONS.includes(p));
     }
+    if (req.body.storeId !== undefined) update.storeId = req.body.storeId || null;
+    if (req.body.storeName !== undefined) update.storeName = req.body.storeName || null;
+    if (req.body.username) update.username = req.body.username;
 
     await ref.update(update);
     const updated = (await ref.get()).data();

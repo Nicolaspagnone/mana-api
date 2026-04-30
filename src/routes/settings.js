@@ -5,26 +5,24 @@ const { requireAdmin } = require('../middleware/auth');
 
 const DOC = 'config/site';
 
-// Valores por defecto
 const DEFAULTS = {
   whatsappPhone: '5493516361785',
   whatsappPhone2: '5493516361785',
-  scheduleWeekdays: 'Lun-Vie: 11:00 - 23:00',
-  scheduleSaturday: 'Sábados: 11:00 - 24:00',
-  scheduleSunday: 'Domingos: 12:00 - 22:00',
   footerTagline: 'El sabor que te nutre el alma 🍕',
   instagramUrl: 'https://www.instagram.com/manaempanadas/',
   facebookUrl: 'https://facebook.com',
   deliveryRadius: '~5km desde cada local',
+  mercadopagoAlias: '',
+  mercadopagoPublicKey: '',
+  storeSelectionEnabled: false,
 };
 
-// GET /api/settings – público (el front lo necesita)
+// GET /api/settings – público
 router.get('/', async (req, res, next) => {
   try {
     const ref = db.doc(DOC);
     const snap = await ref.get();
     if (!snap.exists) {
-      // Inicializar con defaults
       await ref.set(DEFAULTS);
       return res.json(DEFAULTS);
     }
