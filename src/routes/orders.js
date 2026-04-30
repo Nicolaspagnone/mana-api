@@ -5,31 +5,37 @@ const { requireAdmin, requireAuth } = require('../middleware/auth');
 
 const COL = 'orders';
 
-// Estado machine: qué transiciones están permitidas
+// Estado machine — expired is now final (no transitions out)
 const VALID_TRANSITIONS = {
-  pending:   ['confirmed', 'cancelled'],
+  pending:   ['confirmed', 'cancelled', 'expired'],
   confirmed: ['preparing', 'cancelled'],
   preparing: ['ready', 'cancelled'],
-  ready:     ['delivered'],
-  delivered: [],   // estado final
-  cancelled: []    // estado final
+  ready:     ['delivered', 'cancelled'],
+  delivered: [],
+  cancelled: [],
+  expired:   []
 };
 
-// POST /api/orders – público
+const FINAL_STATUSES = ['delivered', 'cancelled', 'expired'];
+
+// POST /api/orders – público (web orders) + local orders via cpanel
 router.post('/', async (req, res, next) => {
   try {
-    const { customer, items, deliveryType, address, total } = req.body;
-
+    const { customer, items, deliveryType, address, total, status, channel } = req.body;
     if (!customer?.firstName || !customer?.phone || !items?.length) {
       return res.status(400).json({ error: 'Datos del pedido incompletos' });
     }
 
+    // Local orders: delivered immediately, channel = local
+    const isLocal = deliveryType === 'local';
     const order = {
       customer: {
         firstName: customer.firstName,
         lastName: customer.lastName || '',
-        phone: customer.phone,
-        address: address || ''
+        phone: customer.phone || '-',
+        address: customer.address || address || '-',
+        housingType: customer.housingType || 'house',
+        apartmentDetails: customer.apartmentDetails || ''
       },
       items: items.map(i => ({
         productId: i.productId,
@@ -41,25 +47,55 @@ router.post('/', async (req, res, next) => {
       })),
       deliveryType: deliveryType || 'pickup',
       total: Number(total),
-      status: 'pending',
-      channel: 'web',
+      status: isLocal ? 'delivered' : 'pending',
+      channel: channel || (isLocal ? 'local' : 'web'),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-
     const docRef = await db.collection(COL).add(order);
     res.status(201).json({ id: docRef.id, ...order });
   } catch (err) { next(err); }
 });
 
-// GET /api/orders – requiere auth (cualquier usuario)
+// GET /api/orders – requiere auth
 router.get('/', requireAuth, async (req, res, next) => {
   try {
-    const { status, limit = 50 } = req.query;
+    const { status, limit = 200 } = req.query;
     let query = db.collection(COL).orderBy('createdAt', 'desc').limit(Number(limit));
-    if (status) query = db.collection(COL).where('status', '==', status).orderBy('createdAt', 'desc').limit(Number(limit));
+    if (status) {
+      query = db.collection(COL)
+        .where('status', '==', status)
+        .orderBy('createdAt', 'desc')
+        .limit(Number(limit));
+    }
     const snap = await query.get();
-    const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    // Auto-marcar como vencidos los "pending" con más de 1 hora
+    const ONE_HOUR = 60 * 60 * 1000;
+    const now = Date.now();
+    const toExpire = data.filter(o =>
+      o.status === 'pending' &&
+      (now - new Date(o.createdAt).getTime()) > ONE_HOUR
+    );
+    if (toExpire.length > 0) {
+      const batch = db.batch();
+      for (const o of toExpire) {
+        batch.update(db.collection(COL).doc(o.id), {
+          status: 'expired',
+          updatedAt: new Date().toISOString()
+        });
+        o.status = 'expired';
+        o.updatedAt = new Date().toISOString();
+      }
+      await batch.commit();
+    }
+
+    // Always sort by date descending (newest first), no priority reordering
+    data.sort((a, b) =>
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+
     res.json(data);
   } catch (err) { next(err); }
 });
@@ -80,16 +116,21 @@ router.patch('/:id/status', requireAuth, async (req, res, next) => {
     const ref = db.collection(COL).doc(req.params.id);
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'Pedido no encontrado' });
-
     const currentStatus = doc.data().status;
-    const allowed = VALID_TRANSITIONS[currentStatus] || [];
 
-    if (!allowed.includes(status)) {
+    // Final status check
+    if (FINAL_STATUSES.includes(currentStatus)) {
       return res.status(400).json({
-        error: `No se puede pasar de "${currentStatus}" a "${status}". Transiciones permitidas: ${allowed.join(', ') || 'ninguna (estado final)'}`
+        error: `El estado "${currentStatus}" es final y no puede modificarse`
       });
     }
 
+    const allowed = VALID_TRANSITIONS[currentStatus] || [];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({
+        error: `No se puede pasar de "${currentStatus}" a "${status}". Permitidas: ${allowed.join(', ') || 'ninguna'}`
+      });
+    }
     await ref.update({ status, updatedAt: new Date().toISOString() });
     res.json({ id: req.params.id, status });
   } catch (err) { next(err); }
