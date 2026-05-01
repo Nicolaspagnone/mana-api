@@ -14,11 +14,29 @@ const DEFAULTS = {
   deliveryRadius: '~5km desde cada local',
   mercadopagoAlias: '',
   mercadopagoPublicKey: '',
+  mercadopagoAccessToken: '',
+  transferAlias: '',
   storeSelectionEnabled: false,
 };
 
 // GET /api/settings – público
 router.get('/', async (req, res, next) => {
+  try {
+    const ref = db.doc(DOC);
+    const snap = await ref.get();
+    if (!snap.exists) {
+      await ref.set(DEFAULTS);
+      return res.json(DEFAULTS);
+    }
+    const data = { ...DEFAULTS, ...snap.data() };
+    // No exponer el access token en el endpoint público
+    delete data.mercadopagoAccessToken;
+    res.json(data);
+  } catch (err) { next(err); }
+});
+
+// GET /api/settings/admin – solo admin (incluye access token)
+router.get('/admin', requireAdmin, async (req, res, next) => {
   try {
     const ref = db.doc(DOC);
     const snap = await ref.get();

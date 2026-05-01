@@ -11,6 +11,7 @@ const authRouter = require('./routes/auth');
 const usersRouter = require('./routes/users');
 const settingsRouter = require('./routes/settings');
 const storesRouter = require('./routes/stores');
+const paymentsRouter = require('./routes/payments');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -40,6 +41,7 @@ app.use('/api/orders', ordersRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/stores', storesRouter);
+app.use('/api/payments', paymentsRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
