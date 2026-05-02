@@ -126,6 +126,33 @@ router.get('/', requireAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/orders/public/:id – público (para consulta de estado de pedido)
+router.get('/public/:id', async (req, res, next) => {
+  try {
+    const doc = await db.collection(COL).doc(req.params.id).get();
+    if (!doc.exists) return res.status(404).json({ error: 'Pedido no encontrado' });
+    const data = { id: doc.id, ...doc.data() };
+    // Solo exponer campos necesarios para el cliente
+    const { id, status, items, total, deliveryType, createdAt, updatedAt, storeId, storeName, customer, paymentMethod } = data;
+    res.json({
+      id,
+      status,
+      items,
+      total,
+      deliveryType,
+      createdAt,
+      updatedAt,
+      storeId,
+      storeName,
+      paymentMethod,
+      customer: {
+        firstName: customer?.firstName,
+        lastName: customer?.lastName
+      }
+    });
+  } catch (err) { next(err); }
+});
+
 // GET /api/orders/:id – requiere auth
 router.get('/:id', requireAuth, async (req, res, next) => {
   try {

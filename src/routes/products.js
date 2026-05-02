@@ -11,27 +11,22 @@ router.get('/', async (req, res, next) => {
     let query = db.collection(COL);
     const { categoryId, available, storeId } = req.query;
 
-    // Aplicar filtros simples (sin combinar where + orderBy para evitar índices compuestos)
     if (available === 'true') query = query.where('available', '==', true);
 
     const snap = await query.get();
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-    // Filtrar por categoría en memoria
     if (categoryId) {
       data = data.filter(p => p.categoryId === categoryId);
     }
 
-    // Filtrar por local en memoria: si el producto tiene storeIds definido,
-    // solo incluirlo si el storeId solicitado está en la lista
     if (storeId) {
       data = data.filter(p => {
-        if (!p.storeIds || p.storeIds.length === 0) return true; // sin restricción = disponible en todos
+        if (!p.storeIds || p.storeIds.length === 0) return true;
         return p.storeIds.includes(storeId);
       });
     }
 
-    // Ordenar por order
     data.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
     res.json(data);
@@ -53,7 +48,7 @@ router.post('/', requireAdmin, async (req, res, next) => {
     const {
       name, description, price, categoryId,
       img = '', popular = false, available = true, order = 0,
-      discountPct = 0, storeIds = []
+      discountPct = 0, storeIds = [], costo
     } = req.body;
     if (!name || !price || !categoryId) {
       return res.status(400).json({ error: 'name, price y categoryId son requeridos' });
@@ -68,6 +63,7 @@ router.post('/', requireAdmin, async (req, res, next) => {
       categoryId, img, popular, available, order: Number(order),
       discountPct: discount,
       storeIds: Array.isArray(storeIds) ? storeIds : [],
+      costo: costo !== undefined && costo !== null && costo !== '' ? Number(costo) : null,
       createdAt: new Date().toISOString()
     });
     res.status(201).json({ id: docRef.id, name, price, categoryId, discountPct: discount, storeIds });
@@ -81,11 +77,12 @@ router.put('/:id', requireAdmin, async (req, res, next) => {
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'Producto no encontrado' });
 
-    const allowed = ['name','description','price','categoryId','img','popular','available','order','discountPct','storeIds'];
+    const allowed = ['name','description','price','categoryId','img','popular','available','order','discountPct','storeIds','costo'];
     const update = { updatedAt: new Date().toISOString() };
     for (const key of allowed) {
       if (req.body[key] !== undefined) {
         if (key === 'price' || key === 'order') update[key] = Number(req.body[key]);
+        else if (key === 'costo') update[key] = req.body[key] !== null && req.body[key] !== '' ? Number(req.body[key]) : null;
         else if (key === 'discountPct') update[key] = Math.min(50, Math.max(0, Number(req.body[key]) || 0));
         else if (key === 'storeIds') update[key] = Array.isArray(req.body[key]) ? req.body[key] : [];
         else update[key] = req.body[key];
