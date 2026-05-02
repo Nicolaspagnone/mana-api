@@ -5,20 +5,21 @@ const { requireAdmin, requireAuth } = require('../middleware/auth');
 
 const COL = 'orders';
 
-// Estado machine – sin "confirmed"
+// Estado machine
 const VALID_TRANSITIONS = {
-  pending:   ['preparing', 'cancelled', 'expired'],
-  preparing: ['ready', 'cancelled'],
-  ready:     ['delivered', 'cancelled'],
-  delivered: [],
-  cancelled: [],
-  expired:   []
+  pending:    ['preparing', 'cancelled', 'expired'],
+  preparing:  ['ready', 'cancelled'],
+  ready:      ['despachado', 'delivered', 'cancelled'],
+  despachado: ['delivered', 'cancelled'],
+  delivered:  [],
+  cancelled:  [],
+  expired:    []
 };
 
 const FINAL_STATUSES = ['delivered', 'cancelled', 'expired'];
 
-// Métodos de pago válidos
-const VALID_PAYMENT_METHODS = ['efectivo', 'transferencia', 'tarjeta', 'mercadopago'];
+// Métodos de pago válidos (sin tarjeta)
+const VALID_PAYMENT_METHODS = ['efectivo', 'transferencia', 'mercadopago'];
 
 // POST /api/orders – público (web orders) + local orders via cpanel
 router.post('/', async (req, res, next) => {
@@ -28,7 +29,6 @@ router.post('/', async (req, res, next) => {
       return res.status(400).json({ error: 'Datos del pedido incompletos' });
     }
 
-    // Local orders: delivered immediately, channel = local
     const isLocal = deliveryType === 'local';
     const order = {
       customer: {
@@ -52,6 +52,7 @@ router.post('/', async (req, res, next) => {
       status: isLocal ? 'delivered' : 'pending',
       channel: channel || (isLocal ? 'local' : 'web'),
       paymentMethod: VALID_PAYMENT_METHODS.includes(paymentMethod) ? paymentMethod : 'efectivo',
+      paid: false,
       storeId: storeId || null,
       storeName: storeName || null,
       createdAt: new Date().toISOString(),
@@ -76,19 +77,18 @@ router.get('/', requireAuth, async (req, res, next) => {
     const snap = await query.get();
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-    // Filtrar por local si se pasa storeId
     if (storeId) {
       data = data.filter(o => o.storeId === storeId);
     }
 
     const ONE_HOUR = 60 * 60 * 1000;
     const TWO_HOURS = 2 * 60 * 60 * 1000;
+    const DESPACHADO_TIMEOUT = 45 * 60 * 1000;
     const now = Date.now();
 
-    // Auto-expirar pendientes sin gestión > 1h
-    // Auto-cancelar preparando/listo sin actualización > 2h
     const toExpire = [];
     const toCancel = [];
+    const toDeliver = [];
 
     for (const o of data) {
       const age = now - new Date(o.createdAt).getTime();
@@ -98,10 +98,12 @@ router.get('/', requireAuth, async (req, res, next) => {
         toExpire.push(o);
       } else if ((o.status === 'preparing' || o.status === 'ready') && lastUpdate > TWO_HOURS) {
         toCancel.push(o);
+      } else if (o.status === 'despachado' && lastUpdate > DESPACHADO_TIMEOUT) {
+        toDeliver.push(o);
       }
     }
 
-    if (toExpire.length > 0 || toCancel.length > 0) {
+    if (toExpire.length > 0 || toCancel.length > 0 || toDeliver.length > 0) {
       const batch = db.batch();
       const nowISO = new Date().toISOString();
 
@@ -115,6 +117,11 @@ router.get('/', requireAuth, async (req, res, next) => {
         o.status = 'cancelled';
         o.updatedAt = nowISO;
       }
+      for (const o of toDeliver) {
+        batch.update(db.collection(COL).doc(o.id), { status: 'delivered', updatedAt: nowISO });
+        o.status = 'delivered';
+        o.updatedAt = nowISO;
+      }
       await batch.commit();
     }
 
@@ -126,13 +133,12 @@ router.get('/', requireAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/orders/public/:id – público (para consulta de estado de pedido)
+// GET /api/orders/public/:id – público
 router.get('/public/:id', async (req, res, next) => {
   try {
     const doc = await db.collection(COL).doc(req.params.id).get();
     if (!doc.exists) return res.status(404).json({ error: 'Pedido no encontrado' });
     const data = { id: doc.id, ...doc.data() };
-    // Solo exponer campos necesarios para el cliente
     const { id, status, items, total, deliveryType, createdAt, updatedAt, storeId, storeName, customer, paymentMethod } = data;
     res.json({
       id,
@@ -169,11 +175,19 @@ router.patch('/:id/status', requireAuth, async (req, res, next) => {
     const ref = db.collection(COL).doc(req.params.id);
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'Pedido no encontrado' });
-    const currentStatus = doc.data().status;
+    const orderData = doc.data();
+    const currentStatus = orderData.status;
 
     if (FINAL_STATUSES.includes(currentStatus)) {
       return res.status(400).json({
         error: `El estado "${currentStatus}" es final y no puede modificarse`
+      });
+    }
+
+    // despachado solo válido para envío a domicilio
+    if (status === 'despachado' && orderData.deliveryType !== 'delivery') {
+      return res.status(400).json({
+        error: 'El estado "despachado" solo aplica a pedidos con envío a domicilio'
       });
     }
 
@@ -185,6 +199,18 @@ router.patch('/:id/status', requireAuth, async (req, res, next) => {
     }
     await ref.update({ status, updatedAt: new Date().toISOString() });
     res.json({ id: req.params.id, status });
+  } catch (err) { next(err); }
+});
+
+// PATCH /api/orders/:id/paid – requiere auth
+router.patch('/:id/paid', requireAuth, async (req, res, next) => {
+  try {
+    const { paid } = req.body;
+    const ref = db.collection(COL).doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Pedido no encontrado' });
+    await ref.update({ paid: !!paid, updatedAt: new Date().toISOString() });
+    res.json({ id: req.params.id, paid: !!paid });
   } catch (err) { next(err); }
 });
 
