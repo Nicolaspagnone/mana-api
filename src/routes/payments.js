@@ -40,9 +40,9 @@ router.post('/mercadopago/preference', async (req, res, next) => {
       ],
       external_reference: orderId,
       back_urls: {
-        success: `${baseUrl}/pedido?status=approved`,
-        failure: `${baseUrl}/pedido?status=failure`,
-        pending: `${baseUrl}/pedido?status=pending`
+        success: `${baseUrl}/pedido/estado?status=approved`,
+        failure: `${baseUrl}/pedido/estado?status=failure`,
+        pending: `${baseUrl}/pedido/estado?status=pending`
       },
       notification_url: process.env.MP_WEBHOOK_URL || undefined
     };
