@@ -117,13 +117,17 @@ router.post('/mercadopago/preference', async (req, res, next) => {
 });
 
 // POST /api/payments/mercadopago/verify
-// Verifica con la API de MP que un payment_id realmente fue aprobado
+// Verifica con la API de MP que un payment_id fue aprobado y que el monto coincide
 router.post('/mercadopago/verify', async (req, res, next) => {
   try {
-    const { paymentId } = req.body;
+    const { paymentId, expectedTotal } = req.body;
 
     if (!paymentId) {
       return res.status(400).json({ error: 'Falta paymentId' });
+    }
+
+    if (expectedTotal === undefined || expectedTotal === null) {
+      return res.status(400).json({ error: 'Falta expectedTotal' });
     }
 
     const snap = await db.doc(SETTINGS_DOC).get();
@@ -166,10 +170,22 @@ router.post('/mercadopago/verify', async (req, res, next) => {
     }
 
     const payment = mpResponse.body;
-    const approved = payment.status === 'approved';
-    console.log(`[MP] Verificación payment ${paymentId}: status=${payment.status}, approved=${approved}`);
+    const statusApproved = payment.status === 'approved';
 
-    res.json({ approved, status: payment.status });
+    // Verificar que el monto pagado coincida con el total esperado (tolerancia de $1 por redondeos)
+    const paidAmount = Number(payment.transaction_amount);
+    const expected = Number(expectedTotal);
+    const amountMatch = Math.abs(paidAmount - expected) <= 1;
+
+    const approved = statusApproved && amountMatch;
+
+    console.log(`[MP] Verificación payment ${paymentId}: status=${payment.status}, paid=${paidAmount}, expected=${expected}, amountMatch=${amountMatch}, approved=${approved}`);
+
+    if (statusApproved && !amountMatch) {
+      console.error(`[MP] ALERTA: monto manipulado - pagado: ${paidAmount}, esperado: ${expected}`);
+    }
+
+    res.json({ approved, status: payment.status, paidAmount, amountMatch });
 
   } catch (err) {
     next(err);
