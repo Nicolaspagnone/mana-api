@@ -139,7 +139,7 @@ router.get('/public/:id', async (req, res, next) => {
     const doc = await db.collection(COL).doc(req.params.id).get();
     if (!doc.exists) return res.status(404).json({ error: 'Pedido no encontrado' });
     const data = { id: doc.id, ...doc.data() };
-    const { id, status, items, total, deliveryType, createdAt, updatedAt, storeId, storeName, customer, paymentMethod } = data;
+    const { id, status, items, total, deliveryType, createdAt, updatedAt, storeId, storeName, customer, paymentMethod, paid } = data;
     res.json({
       id,
       status,
@@ -151,6 +151,7 @@ router.get('/public/:id', async (req, res, next) => {
       storeId,
       storeName,
       paymentMethod,
+      paid: !!paid,
       customer: {
         firstName: customer?.firstName,
         lastName: customer?.lastName
