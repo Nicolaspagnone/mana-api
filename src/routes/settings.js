@@ -15,6 +15,7 @@ const DEFAULTS = {
   mercadopagoAlias: '',
   mercadopagoPublicKey: '',
   mercadopagoAccessToken: '',
+  mercadopagoTestMode: false,
   transferAlias: '',
   storeSelectionEnabled: false,
 };

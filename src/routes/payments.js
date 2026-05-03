@@ -9,7 +9,7 @@ const SETTINGS_DOC = 'config/site';
 // Crea una preferencia de Checkout Pro y devuelve init_point
 router.post('/mercadopago/preference', async (req, res, next) => {
   try {
-    const { orderId, total, title, returnUrl } = req.body;
+    const { orderId, total, title, returnUrl, payerEmail } = req.body;
 
     if (!orderId || !total) {
       return res.status(400).json({ error: 'Faltan datos: orderId y total son requeridos' });
@@ -24,6 +24,9 @@ router.post('/mercadopago/preference', async (req, res, next) => {
       return res.status(503).json({ error: 'MercadoPago no configurado. Contactá al administrador.' });
     }
 
+    // Usar el flag de modo prueba guardado en settings
+    const isTestMode = !!settings.mercadopagoTestMode;
+
     const baseUrl = returnUrl || process.env.FRONTEND_URL || 'https://manaempanadas.com.ar';
 
     const preference = {
@@ -37,13 +40,28 @@ router.post('/mercadopago/preference', async (req, res, next) => {
       ],
       external_reference: orderId,
       back_urls: {
-        success: `${baseUrl}/pedido?order=${orderId}&status=approved`,
-        failure: `${baseUrl}/pedido?order=${orderId}&status=failure`,
-        pending: `${baseUrl}/pedido?order=${orderId}&status=pending`
+        success: `${baseUrl}/pedido?status=approved`,
+        failure: `${baseUrl}/pedido?status=failure`,
+        pending: `${baseUrl}/pedido?status=pending`
       },
-      auto_return: 'approved',
       notification_url: process.env.MP_WEBHOOK_URL || undefined
     };
+
+    // auto_return: solo cuando back_url.success es HTTPS (requerido por MP).
+    // En localhost/HTTP se omite para evitar el error de validación.
+    if (baseUrl.startsWith('https://')) {
+      preference.auto_return = 'approved';
+    }
+
+    // En modo test, el payer.email debe ser el usuario comprador de prueba (no el vendedor).
+    // Esto evita que MP deshabilite el botón de pagar por email de vendedor == pagador.
+    if (isTestMode) {
+      preference.payer = { email: payerEmail || 'test_user_comprador@testuser.com' };
+    } else if (payerEmail) {
+      preference.payer = { email: payerEmail };
+    }
+
+    console.log(`[MP] Creando preferencia - isTest: ${isTestMode}, baseUrl: ${baseUrl}, total: ${total}`);
 
     // Llamada a API de MercadoPago
     const mpResponse = await new Promise((resolve, reject) => {
@@ -77,18 +95,20 @@ router.post('/mercadopago/preference', async (req, res, next) => {
     });
 
     if (mpResponse.status !== 201 && mpResponse.status !== 200) {
-      console.error('MercadoPago error:', mpResponse.body);
+      console.error('[MP] Error al crear preferencia:', JSON.stringify(mpResponse.body));
       return res.status(502).json({
         error: 'Error al crear preferencia en MercadoPago',
-        detail: mpResponse.body?.message || 'Error desconocido'
+        detail: mpResponse.body?.message || mpResponse.body?.cause?.[0]?.description || 'Error desconocido'
       });
     }
 
     const { id, init_point, sandbox_init_point } = mpResponse.body;
+    console.log(`[MP] Preferencia creada - id: ${id}, isTest: ${isTestMode}`);
     res.json({
       preferenceId: id,
       init_point,
-      sandbox_init_point
+      sandbox_init_point,
+      isTest: isTestMode
     });
 
   } catch (err) {
