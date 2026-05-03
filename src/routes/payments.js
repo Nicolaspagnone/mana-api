@@ -116,4 +116,64 @@ router.post('/mercadopago/preference', async (req, res, next) => {
   }
 });
 
+// POST /api/payments/mercadopago/verify
+// Verifica con la API de MP que un payment_id realmente fue aprobado
+router.post('/mercadopago/verify', async (req, res, next) => {
+  try {
+    const { paymentId } = req.body;
+
+    if (!paymentId) {
+      return res.status(400).json({ error: 'Falta paymentId' });
+    }
+
+    const snap = await db.doc(SETTINGS_DOC).get();
+    const settings = snap.exists ? snap.data() : {};
+    const accessToken = settings.mercadopagoAccessToken || '';
+
+    if (!accessToken) {
+      return res.status(503).json({ error: 'MercadoPago no configurado' });
+    }
+
+    const mpResponse = await new Promise((resolve, reject) => {
+      const options = {
+        hostname: 'api.mercadopago.com',
+        path: `/v1/payments/${paymentId}`,
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`
+        }
+      };
+
+      const request = https.request(options, (response) => {
+        let data = '';
+        response.on('data', chunk => { data += chunk; });
+        response.on('end', () => {
+          try {
+            resolve({ status: response.statusCode, body: JSON.parse(data) });
+          } catch (e) {
+            reject(new Error('Error parsing MercadoPago response'));
+          }
+        });
+      });
+
+      request.on('error', reject);
+      request.end();
+    });
+
+    if (mpResponse.status !== 200) {
+      console.error('[MP] Error al verificar pago:', JSON.stringify(mpResponse.body));
+      return res.status(502).json({ approved: false, error: 'No se pudo verificar el pago' });
+    }
+
+    const payment = mpResponse.body;
+    const approved = payment.status === 'approved';
+    console.log(`[MP] Verificación payment ${paymentId}: status=${payment.status}, approved=${approved}`);
+
+    res.json({ approved, status: payment.status });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;
