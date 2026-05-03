@@ -202,8 +202,8 @@ router.patch('/:id/status', requireAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PATCH /api/orders/:id/paid – requiere auth
-router.patch('/:id/paid', requireAuth, async (req, res, next) => {
+// PATCH /api/orders/:id/paid – público (llamado desde el frontend tras retorno de MercadoPago)
+router.patch('/:id/paid', async (req, res, next) => {
   try {
     const { paid } = req.body;
     const ref = db.collection(COL).doc(req.params.id);
