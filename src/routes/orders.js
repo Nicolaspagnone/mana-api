@@ -24,7 +24,7 @@ const VALID_PAYMENT_METHODS = ['efectivo', 'transferencia', 'mercadopago'];
 // POST /api/orders – público (web orders) + local orders via cpanel
 router.post('/', async (req, res, next) => {
   try {
-    const { customer, items, deliveryType, address, total, status, channel, paymentMethod, storeId, storeName } = req.body;
+    const { customer, items, deliveryType, address, total, status, channel, paymentMethod, storeId, storeName, deliveryCost } = req.body;
     if (!customer?.firstName || !customer?.phone || !items?.length) {
       return res.status(400).json({ error: 'Datos del pedido incompletos' });
     }
@@ -49,6 +49,7 @@ router.post('/', async (req, res, next) => {
       })),
       deliveryType: deliveryType || 'pickup',
       total: Number(total),
+      deliveryCost: Number(deliveryCost || 0),
       status: isLocal ? 'delivered' : 'pending',
       channel: channel || (isLocal ? 'local' : 'web'),
       paymentMethod: VALID_PAYMENT_METHODS.includes(paymentMethod) ? paymentMethod : 'efectivo',
@@ -139,12 +140,13 @@ router.get('/public/:id', async (req, res, next) => {
     const doc = await db.collection(COL).doc(req.params.id).get();
     if (!doc.exists) return res.status(404).json({ error: 'Pedido no encontrado' });
     const data = { id: doc.id, ...doc.data() };
-    const { id, status, items, total, deliveryType, createdAt, updatedAt, storeId, storeName, customer, paymentMethod, paid } = data;
+    const { id, status, items, total, deliveryCost, deliveryType, createdAt, updatedAt, storeId, storeName, customer, paymentMethod, paid } = data;
     res.json({
       id,
       status,
       items,
       total,
+      deliveryCost: deliveryCost || 0,
       deliveryType,
       createdAt,
       updatedAt,
