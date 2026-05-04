@@ -23,6 +23,8 @@ router.get('/', async (req, res, next) => {
           scheduleWeekdays: 'Lun-Vie: 11:00 - 23:00',
           scheduleSaturday: 'Sábados: 11:00 - 24:00',
           scheduleSunday: 'Domingos: 12:00 - 22:00',
+          costo_envio: 0,
+          radio_envio: 5,
           order: 1,
           active: true,
           isDefault: true,
@@ -40,6 +42,8 @@ router.get('/', async (req, res, next) => {
           scheduleWeekdays: 'Lun-Vie: 11:00 - 23:00',
           scheduleSaturday: 'Sábados: 11:00 - 24:00',
           scheduleSunday: 'Domingos: 12:00 - 22:00',
+          costo_envio: 0,
+          radio_envio: 5,
           order: 2,
           active: true,
           isDefault: false,
@@ -65,7 +69,8 @@ router.get('/', async (req, res, next) => {
 router.post('/', requireAdmin, async (req, res, next) => {
   try {
     const { name, address, addressFull, phone, mapUrl, mapImg, emoji,
-      scheduleWeekdays, scheduleSaturday, scheduleSunday, order, active } = req.body;
+      scheduleWeekdays, scheduleSaturday, scheduleSunday, order, active,
+      costo_envio, radio_envio } = req.body;
     if (!name) return res.status(400).json({ error: 'El nombre es requerido' });
     const store = {
       name, address: address || '', addressFull: addressFull || address || '',
@@ -75,6 +80,8 @@ router.post('/', requireAdmin, async (req, res, next) => {
       scheduleWeekdays: scheduleWeekdays || '', scheduleSaturday: scheduleSaturday || '',
       scheduleSunday: scheduleSunday || '', order: Number(order) || 99,
       active: active !== false, isDefault: false,
+      costo_envio: Number(costo_envio) || 0,
+      radio_envio: Number(radio_envio) || 5,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
     };
     const ref = await db.collection(COL).add(store);
@@ -90,7 +97,8 @@ router.put('/:id', requireAdmin, async (req, res, next) => {
     if (!doc.exists) return res.status(404).json({ error: 'Local no encontrado' });
 
     const allowed = ['name','address','addressFull','phone','mapUrl','mapImg','emoji',
-      'scheduleWeekdays','scheduleSaturday','scheduleSunday','order','active','isDefault'];
+      'scheduleWeekdays','scheduleSaturday','scheduleSunday','order','active','isDefault',
+      'costo_envio','radio_envio'];
     const update = { updatedAt: new Date().toISOString() };
     for (const key of allowed) {
       if (req.body[key] !== undefined) update[key] = req.body[key];
