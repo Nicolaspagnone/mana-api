@@ -135,6 +135,71 @@ router.post('/mercadopago/preference', async (req, res, next) => {
   }
 });
 
+// POST /api/payments/mercadopago/retry-check
+router.post('/mercadopago/retry-check', async (req, res, next) => {
+  try {
+    const { orderId } = req.body;
+
+    if (!orderId) {
+      return res.status(400).json({ error: 'Falta orderId' });
+    }
+
+    const orderRef = db.collection('orders').doc(orderId);
+    const orderDoc = await orderRef.get();
+
+    if (!orderDoc.exists) {
+      return res.status(404).json({ error: 'Pedido no encontrado' });
+    }
+
+    const orderData = orderDoc.data();
+
+    if (orderData.paid) {
+      return res.json({ alreadyPaid: true });
+    }
+
+    const accessToken = await getMpAccessToken();
+    if (!accessToken) {
+      return res.json({ alreadyPaid: false });
+    }
+
+    const mpResponse = await mpGet(
+      `/v1/payments/search?external_reference=${encodeURIComponent(orderId)}&sort=date_created&criteria=desc&range=date_created&begin_date=NOW-7DAYS&end_date=NOW`,
+      accessToken
+    );
+
+    if (mpResponse.status !== 200) {
+      console.error(`[MP RetryCheck] Error al buscar pagos para ${orderId}:`, JSON.stringify(mpResponse.body));
+      return res.json({ alreadyPaid: false });
+    }
+
+    const results = mpResponse.body?.results || [];
+    const expectedTotal = Number(orderData.total);
+
+    const approvedPayment = results.find(payment => {
+      if (payment.status !== 'approved') return false;
+      const transactionAmount = Number(payment.transaction_amount);
+      if (isNaN(transactionAmount) || isNaN(expectedTotal)) return false;
+      return Math.abs(transactionAmount - expectedTotal) <= 1;
+    });
+
+    if (approvedPayment) {
+      await orderRef.update({
+        paid: true,
+        paymentId: String(approvedPayment.id),
+        paidAmount: Number(approvedPayment.transaction_amount),
+        updatedAt: new Date().toISOString()
+      });
+      console.log(`[MP RetryCheck] Pedido ${orderId} marcado como pagado via retry-check`);
+      return res.json({ alreadyPaid: true });
+    }
+
+    return res.json({ alreadyPaid: false });
+
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/payments/mercadopago/webhook
 router.post('/mercadopago/webhook', async (req, res) => {
   // Responder 200 inmediatamente
