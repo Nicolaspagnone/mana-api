@@ -5,6 +5,16 @@ const { requireAdmin, requireAuth } = require('../middleware/auth');
 
 const COL = 'stores';
 
+const SHIPPING_DEFAULTS = {
+  costo_envio: 0,
+  radio_envio: 5,
+  base_km: 2,
+  step_km: 0.5,
+  step_price: 500,
+  rain_extra: 500,
+  holiday_extra: 700
+};
+
 // GET /api/stores – público
 router.get('/', async (req, res, next) => {
   try {
@@ -23,8 +33,7 @@ router.get('/', async (req, res, next) => {
           scheduleWeekdays: 'Lun-Vie: 11:00 - 23:00',
           scheduleSaturday: 'Sábados: 11:00 - 24:00',
           scheduleSunday: 'Domingos: 12:00 - 22:00',
-          costo_envio: 0,
-          radio_envio: 5,
+          ...SHIPPING_DEFAULTS,
           order: 1,
           active: true,
           isDefault: true,
@@ -42,8 +51,7 @@ router.get('/', async (req, res, next) => {
           scheduleWeekdays: 'Lun-Vie: 11:00 - 23:00',
           scheduleSaturday: 'Sábados: 11:00 - 24:00',
           scheduleSunday: 'Domingos: 12:00 - 22:00',
-          costo_envio: 0,
-          radio_envio: 5,
+          ...SHIPPING_DEFAULTS,
           order: 2,
           active: true,
           isDefault: false,
@@ -69,8 +77,7 @@ router.get('/', async (req, res, next) => {
 router.post('/', requireAdmin, async (req, res, next) => {
   try {
     const { name, address, addressFull, phone, mapUrl, mapImg, emoji,
-      scheduleWeekdays, scheduleSaturday, scheduleSunday, order, active,
-      costo_envio, radio_envio } = req.body;
+      scheduleWeekdays, scheduleSaturday, scheduleSunday, order, active } = req.body;
     if (!name) return res.status(400).json({ error: 'El nombre es requerido' });
     const store = {
       name, address: address || '', addressFull: addressFull || address || '',
@@ -80,8 +87,13 @@ router.post('/', requireAdmin, async (req, res, next) => {
       scheduleWeekdays: scheduleWeekdays || '', scheduleSaturday: scheduleSaturday || '',
       scheduleSunday: scheduleSunday || '', order: Number(order) || 99,
       active: active !== false, isDefault: false,
-      costo_envio: Number(costo_envio) || 0,
-      radio_envio: Number(radio_envio) || 5,
+      costo_envio: req.body.costo_envio != null ? Number(req.body.costo_envio) : SHIPPING_DEFAULTS.costo_envio,
+      radio_envio: req.body.radio_envio != null ? Number(req.body.radio_envio) : SHIPPING_DEFAULTS.radio_envio,
+      base_km:     req.body.base_km     != null ? Number(req.body.base_km)     : SHIPPING_DEFAULTS.base_km,
+      step_km:     req.body.step_km     != null ? Number(req.body.step_km)     : SHIPPING_DEFAULTS.step_km,
+      step_price:  req.body.step_price  != null ? Number(req.body.step_price)  : SHIPPING_DEFAULTS.step_price,
+      rain_extra:  req.body.rain_extra  != null ? Number(req.body.rain_extra)  : SHIPPING_DEFAULTS.rain_extra,
+      holiday_extra: req.body.holiday_extra != null ? Number(req.body.holiday_extra) : SHIPPING_DEFAULTS.holiday_extra,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
     };
     const ref = await db.collection(COL).add(store);
@@ -98,7 +110,7 @@ router.put('/:id', requireAdmin, async (req, res, next) => {
 
     const allowed = ['name','address','addressFull','phone','mapUrl','mapImg','emoji',
       'scheduleWeekdays','scheduleSaturday','scheduleSunday','order','active','isDefault',
-      'costo_envio','radio_envio'];
+      'costo_envio','radio_envio','base_km','step_km','step_price','rain_extra','holiday_extra'];
     const update = { updatedAt: new Date().toISOString() };
     for (const key of allowed) {
       if (req.body[key] !== undefined) update[key] = req.body[key];
