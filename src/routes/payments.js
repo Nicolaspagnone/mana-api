@@ -207,7 +207,6 @@ router.post('/mercadopago/webhook', async (req, res) => {
     if (statusApproved && amountMatch) {
       await orderRef.update({
         paid: true,
-        status: 'pagado',
         paymentId: paymentId,
         paidAmount: transactionAmount,
         updatedAt: new Date().toISOString()
