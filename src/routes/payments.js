@@ -145,6 +145,8 @@ router.post('/mercadopago/webhook', async (req, res) => {
       return;
     }
 
+    console.log('[MP Webhook] Recibido evento payment:', JSON.stringify(req.body));
+
     const paymentId = req.body?.data?.id;
     if (!paymentId) return;
 
