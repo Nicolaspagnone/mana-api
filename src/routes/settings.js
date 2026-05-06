@@ -18,21 +18,73 @@ const DEFAULTS = {
   mercadopagoTestMode: false,
   transferAlias: '',
   storeSelectionEnabled: false,
+  storeLat: -31.4201,
+  storeLng: -64.1888,
 };
+
+const rainCache = { value: null, expiry: 0 };
+const holidayCache = { value: null, expiry: 0 };
+
+async function fetchEsLluvia(lat, lng) {
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=precipitation&timezone=America%2FArgentina%2FBuenos_Aires`;
+    const res = await fetch(url);
+    if (!res.ok) return false;
+    const data = await res.json();
+    return (data?.current?.precipitation ?? 0) > 0.2;
+  } catch {
+    return false;
+  }
+}
+
+async function fetchEsFeriado() {
+  const hoy = new Date();
+  const year = hoy.getFullYear();
+  const fechaHoy = `${year}-${String(hoy.getMonth() + 1).padStart(2, '0')}-${String(hoy.getDate()).padStart(2, '0')}`;
+  try {
+    const snap = await db.collection('feriados').where('date', '==', fechaHoy).limit(1).get();
+    if (!snap.empty) return true;
+  } catch { /* fallback a API */ }
+  try {
+    const res = await fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/AR`);
+    if (!res.ok) return false;
+    const feriados = await res.json();
+    return feriados.some(f => f.date === fechaHoy);
+  } catch {
+    return false;
+  }
+}
+
+async function getEsLluvia(lat, lng) {
+  const now = Date.now();
+  if (rainCache.value !== null && now < rainCache.expiry) return rainCache.value;
+  const result = await fetchEsLluvia(lat, lng);
+  rainCache.value = result;
+  rainCache.expiry = now + 10 * 60 * 1000;
+  return result;
+}
+
+async function getEsFeriado() {
+  const now = Date.now();
+  if (holidayCache.value !== null && now < holidayCache.expiry) return holidayCache.value;
+  const result = await fetchEsFeriado();
+  holidayCache.value = result;
+  holidayCache.expiry = now + 24 * 60 * 60 * 1000;
+  return result;
+}
 
 // GET /api/settings – público
 router.get('/', async (req, res, next) => {
   try {
     const ref = db.doc(DOC);
     const snap = await ref.get();
-    if (!snap.exists) {
-      await ref.set(DEFAULTS);
-      return res.json(DEFAULTS);
-    }
-    const data = { ...DEFAULTS, ...snap.data() };
-    // No exponer el access token en el endpoint público
+    if (!snap.exists) await ref.set(DEFAULTS);
+    const data = { ...DEFAULTS, ...(snap.exists ? snap.data() : {}) };
     delete data.mercadopagoAccessToken;
-    res.json(data);
+    const lat = data.storeLat ?? DEFAULTS.storeLat;
+    const lng = data.storeLng ?? DEFAULTS.storeLng;
+    const [esLluvia, esFeriado] = await Promise.all([getEsLluvia(lat, lng), getEsFeriado()]);
+    res.json({ ...data, esLluvia, esFeriado });
   } catch (err) { next(err); }
 });
 
