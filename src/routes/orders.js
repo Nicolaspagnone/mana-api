@@ -7,7 +7,7 @@ const COL = 'orders';
 
 // Estado machine
 const VALID_TRANSITIONS = {
-  pending:    ['preparing', 'cancelled', 'expired'],
+  pending:    ['preparing', 'cancelled'],
   preparing:  ['ready', 'cancelled'],
   ready:      ['despachado', 'delivered', 'cancelled'],
   despachado: ['delivered', 'cancelled'],
