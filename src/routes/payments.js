@@ -20,19 +20,6 @@ async function getMpCredentials(storeId) {
   };
 }
 
-/**
- * Para el webhook: no sabemos el storeId aún.
- * Devuelve el primer access token disponible entre los locales activos.
- * En la práctica, las pymes usan una sola cuenta MP para todos sus locales.
- */
-async function getAnyMpAccessToken() {
-  const snap = await db.collection('stores').get();
-  for (const doc of snap.docs) {
-    const token = doc.data().mercadopagoAccessToken;
-    if (token) return token;
-  }
-  return '';
-}
 
 function mpRequest(method, path, accessToken, body) {
   return new Promise((resolve, reject) => {
@@ -78,7 +65,7 @@ router.post('/mercadopago/preference', async (req, res, next) => {
       return res.status(503).json({ error: 'MercadoPago no configurado para este local. Contactá al administrador.' });
     }
 
-    const baseUrl = returnUrl || process.env.FRONTEND_URL || 'https://manaempanadas.com.ar';
+    const baseUrl = returnUrl || 'https://manaempanadas.app';
 
     const preference = {
       items: [{
@@ -93,7 +80,9 @@ router.post('/mercadopago/preference', async (req, res, next) => {
         failure: `${baseUrl}/pedido/estado`,
         pending: `${baseUrl}/pedido/estado`
       },
-      notification_url: process.env.MP_WEBHOOK_URL || undefined
+      notification_url: storeId && process.env.BACKEND_URL
+        ? `${process.env.BACKEND_URL}/api/payments/mercadopago/webhook/${storeId}`
+        : undefined
     };
 
     if (baseUrl.startsWith('https://')) preference.auto_return = 'approved';
@@ -174,8 +163,8 @@ router.post('/mercadopago/retry-check', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ── POST /api/payments/mercadopago/webhook ────────────────
-router.post('/mercadopago/webhook', async (req, res) => {
+// ── POST /api/payments/mercadopago/webhook/:storeId ───────
+router.post('/mercadopago/webhook/:storeId', async (req, res) => {
   res.sendStatus(200); // Responder inmediatamente
 
   try {
@@ -184,14 +173,12 @@ router.post('/mercadopago/webhook', async (req, res) => {
     const paymentId = req.body?.data?.id;
     if (!paymentId) return;
 
-    console.log('[MP Webhook] Recibido evento payment:', JSON.stringify(req.body));
+    const { storeId } = req.params;
+    console.log(`[MP Webhook] Recibido evento payment - storeId: ${storeId}:`, JSON.stringify(req.body));
 
-    // Para el webhook no conocemos el storeId aún → usamos el primer token disponible.
-    // Una vez que tengamos el external_reference (orderId), podríamos usar el del store,
-    // pero la llamada a MP ya estará hecha y no se necesita más.
-    const accessToken = await getAnyMpAccessToken();
+    const { accessToken } = await getMpCredentials(storeId);
     if (!accessToken) {
-      console.error('[MP Webhook] No hay access token configurado en ningún local');
+      console.error(`[MP Webhook] No hay access token configurado para el local ${storeId}`);
       return;
     }
 
