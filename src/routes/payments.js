@@ -168,12 +168,14 @@ router.post('/mercadopago/webhook/:storeId', async (req, res) => {
   res.sendStatus(200); // Responder inmediatamente
 
   try {
+  
     if (req.body.type !== 'payment') return;
 
     const paymentId = req.body?.data?.id;
     if (!paymentId) return;
 
     const { storeId } = req.params;
+    console.log(`Este es un pago para el local ${storeId}`);
     console.log(`[MP Webhook] Recibido evento payment - storeId: ${storeId}:`, JSON.stringify(req.body));
 
     const { accessToken } = await getMpCredentials(storeId);
@@ -204,11 +206,6 @@ router.post('/mercadopago/webhook/:storeId', async (req, res) => {
     }
 
     const orderData = orderDoc.data();
-    if (orderData.paid) {
-      console.log(`[MP Webhook] Pedido ${externalReference} ya estaba pagado`);
-      return;
-    }
-
     const status = payment.status;
     const transactionAmount = Number(payment.transaction_amount);
     const expectedTotal = Number(orderData.total);
@@ -219,21 +216,57 @@ router.post('/mercadopago/webhook/:storeId', async (req, res) => {
     }
 
     const amountMatch = Math.abs(transactionAmount - expectedTotal) <= 1;
-    console.log(`[MP Webhook] payment ${paymentId}: status=${status}, paid=${transactionAmount}, expected=${expectedTotal}, match=${amountMatch}`);
+    console.log(`[MP Webhook] payment ${paymentId}: status=${status}, amount=${transactionAmount}, expected=${expectedTotal}, match=${amountMatch}`);
 
-    if (status === 'approved' && !amountMatch) {
-      console.error(`[MP Webhook] ALERTA: monto manipulado - pagado: ${transactionAmount}, esperado: ${expectedTotal}`);
+    // Idempotencia: si ya está pagado y llega otro 'approved', ignorar
+    if (status === 'approved' && orderData.paid) {
+      console.log(`[MP Webhook] Pedido ${externalReference} ya estaba pagado, ignorando`);
+      return;
     }
 
-    if (status === 'approved' && amountMatch) {
-      await orderRef.update({
-        paid: true,
-        paymentId: String(paymentId),
-        paidAmount: transactionAmount,
-        updatedAt: new Date().toISOString()
-      });
-      console.log(`[MP Webhook] Pedido ${externalReference} marcado como pagado`);
+    // Base del update — siempre se guarda el estado y timestamp
+    const update = {
+      paymentStatus: status,
+      paymentStatusDetail: payment.status_detail || '',
+      paymentStatusUpdatedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    switch (status) {
+      case 'approved':
+        if (amountMatch) {
+          update.paid = true;
+          update.paymentId = String(paymentId);
+          update.paidAmount = transactionAmount;
+          console.log(`[MP Webhook] Pedido ${externalReference} marcado como pagado`);
+        } else {
+          console.error(`[MP Webhook] ALERTA: monto manipulado - pagado: ${transactionAmount}, esperado: ${expectedTotal}`);
+        }
+        break;
+
+      case 'refunded':
+      case 'partially_refunded':
+        update.refunded = true;
+        console.log(`[MP Webhook] Pedido ${externalReference} con reintegro (${status})`);
+        break;
+
+      case 'charged_back':
+        update.chargedBack = true;
+        update.paymentProblem = true;
+        console.log(`[MP Webhook] Pedido ${externalReference} con contracargo`);
+        break;
+
+      case 'cancelled':
+      case 'rejected':
+      case 'pending':
+        console.log(`[MP Webhook] Pedido ${externalReference}: pago ${status}`);
+        break;
+
+      default:
+        console.log(`[MP Webhook] Estado no manejado: ${status} para pedido ${externalReference}`);
     }
+
+    await orderRef.update(update);
 
   } catch (err) {
     console.error('[MP Webhook] Error procesando webhook:', err);
