@@ -1,11 +1,11 @@
 const express = require('express');
-const router = express.Router();
-const { db } = require('../firebase');
+const router  = express.Router();
+const { db }  = require('../firebase');
 const { requireAdmin, requireAuth } = require('../middleware/auth');
+const { tenantQuery, assertTenantOwnership } = require('../utils/tenantQuery');
 
 const COL = 'orders';
 
-// Estado machine
 const VALID_TRANSITIONS = {
   pending:    ['preparing', 'cancelled'],
   preparing:  ['ready', 'cancelled'],
@@ -16,12 +16,10 @@ const VALID_TRANSITIONS = {
   expired:    []
 };
 
-const FINAL_STATUSES = ['delivered', 'cancelled', 'expired'];
+const FINAL_STATUSES          = ['delivered', 'cancelled', 'expired'];
+const VALID_PAYMENT_METHODS   = ['efectivo', 'transferencia', 'mercadopago'];
 
-// Métodos de pago válidos (sin tarjeta)
-const VALID_PAYMENT_METHODS = ['efectivo', 'transferencia', 'mercadopago'];
-
-// POST /api/orders – público (web orders) + local orders via cpanel
+// POST /api/orders – público (web + cpanel local)
 router.post('/', async (req, res, next) => {
   try {
     const { customer, items, deliveryType, address, total, status, channel, paymentMethod, storeId, storeName, deliveryCost } = req.body;
@@ -31,33 +29,34 @@ router.post('/', async (req, res, next) => {
 
     const isLocal = deliveryType === 'local';
     const order = {
+      tenantId: req.tenantId,          // ← multi-tenant
       customer: {
-        firstName: customer.firstName,
-        lastName: customer.lastName || '',
-        phone: customer.phone || '-',
-        address: customer.address || address || '-',
-        housingType: customer.housingType || 'house',
+        firstName:        customer.firstName,
+        lastName:         customer.lastName        || '',
+        phone:            customer.phone           || '-',
+        address:          customer.address || address || '-',
+        housingType:      customer.housingType     || 'house',
         apartmentDetails: customer.apartmentDetails || ''
       },
       items: items.map(i => ({
-        productId: i.productId,
+        productId:   i.productId,
         productName: i.productName,
-        quantity: Number(i.quantity),
-        unitPrice: Number(i.unitPrice),
+        quantity:    Number(i.quantity),
+        unitPrice:   Number(i.unitPrice),
         discountPct: Number(i.discountPct || 0),
-        subtotal: Number(i.subtotal)
+        subtotal:    Number(i.subtotal)
       })),
-      deliveryType: deliveryType || 'pickup',
-      total: Number(total),
-      deliveryCost: Number(deliveryCost || 0),
-      status: isLocal ? 'delivered' : 'pending',
-      channel: channel || (isLocal ? 'local' : 'web'),
+      deliveryType:  deliveryType || 'pickup',
+      total:         Number(total),
+      deliveryCost:  Number(deliveryCost || 0),
+      status:        isLocal ? 'delivered' : 'pending',
+      channel:       channel || (isLocal ? 'local' : 'web'),
       paymentMethod: VALID_PAYMENT_METHODS.includes(paymentMethod) ? paymentMethod : 'efectivo',
-      paid: false,
-      storeId: storeId || null,
-      storeName: storeName || null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      paid:          false,
+      storeId:       storeId  || null,
+      storeName:     storeName || null,
+      createdAt:     new Date().toISOString(),
+      updatedAt:     new Date().toISOString()
     };
     const docRef = await db.collection(COL).add(order);
     res.status(201).json({ id: docRef.id, ...order });
@@ -68,13 +67,14 @@ router.post('/', async (req, res, next) => {
 router.get('/', requireAuth, async (req, res, next) => {
   try {
     const { status, limit = 200, storeId } = req.query;
-    let query = db.collection(COL).orderBy('createdAt', 'desc').limit(Number(limit));
+
+    let query = tenantQuery(COL, req.tenantId).limit(Number(limit));
     if (status) {
-      query = db.collection(COL)
+      query = tenantQuery(COL, req.tenantId)
         .where('status', '==', status)
-        .orderBy('createdAt', 'desc')
         .limit(Number(limit));
     }
+
     const snap = await query.get();
     let data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
@@ -82,17 +82,18 @@ router.get('/', requireAuth, async (req, res, next) => {
       data = data.filter(o => o.storeId === storeId);
     }
 
-    const ONE_HOUR = 60 * 60 * 1000;
-    const TWO_HOURS = 2 * 60 * 60 * 1000;
+    // Auto-expire logic
+    const ONE_HOUR          = 60 * 60 * 1000;
+    const TWO_HOURS         = 2 * 60 * 60 * 1000;
     const DESPACHADO_TIMEOUT = 45 * 60 * 1000;
     const now = Date.now();
 
-    const toExpire = [];
-    const toCancel = [];
+    const toExpire  = [];
+    const toCancel  = [];
     const toDeliver = [];
 
     for (const o of data) {
-      const age = now - new Date(o.createdAt).getTime();
+      const age        = now - new Date(o.createdAt).getTime();
       const lastUpdate = now - new Date(o.updatedAt || o.createdAt).getTime();
 
       if (o.status === 'pending' && age > ONE_HOUR) {
@@ -105,58 +106,49 @@ router.get('/', requireAuth, async (req, res, next) => {
     }
 
     if (toExpire.length > 0 || toCancel.length > 0 || toDeliver.length > 0) {
-      const batch = db.batch();
+      const batch  = db.batch();
       const nowISO = new Date().toISOString();
-
-      for (const o of toExpire) {
-        batch.update(db.collection(COL).doc(o.id), { status: 'expired', updatedAt: nowISO });
-        o.status = 'expired';
-        o.updatedAt = nowISO;
-      }
-      for (const o of toCancel) {
-        batch.update(db.collection(COL).doc(o.id), { status: 'cancelled', updatedAt: nowISO });
-        o.status = 'cancelled';
-        o.updatedAt = nowISO;
-      }
-      for (const o of toDeliver) {
-        batch.update(db.collection(COL).doc(o.id), { status: 'delivered', updatedAt: nowISO });
-        o.status = 'delivered';
-        o.updatedAt = nowISO;
-      }
+      for (const o of toExpire)  { batch.update(db.collection(COL).doc(o.id), { status: 'expired',   updatedAt: nowISO }); o.status = 'expired';   o.updatedAt = nowISO; }
+      for (const o of toCancel)  { batch.update(db.collection(COL).doc(o.id), { status: 'cancelled', updatedAt: nowISO }); o.status = 'cancelled'; o.updatedAt = nowISO; }
+      for (const o of toDeliver) { batch.update(db.collection(COL).doc(o.id), { status: 'delivered', updatedAt: nowISO }); o.status = 'delivered'; o.updatedAt = nowISO; }
       await batch.commit();
     }
 
-    data.sort((a, b) =>
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
-
+    data.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     res.json(data);
   } catch (err) { next(err); }
 });
 
-// GET /api/orders/public/:id – público
+// GET /api/orders/public/:id – público (page de estado del pedido)
 router.get('/public/:id', async (req, res, next) => {
   try {
     const doc = await db.collection(COL).doc(req.params.id).get();
     if (!doc.exists) return res.status(404).json({ error: 'Pedido no encontrado' });
+
     const data = { id: doc.id, ...doc.data() };
-    const { id, status, items, total, deliveryCost, deliveryType, createdAt, updatedAt, storeId, storeName, customer, paymentMethod, paid } = data;
+
+    // Verificar pertenencia al tenant activo
+    if (data.tenantId && data.tenantId !== req.tenantId) {
+      return res.status(404).json({ error: 'Pedido no encontrado' });
+    }
+
+    const { id, status, items, total, deliveryCost, deliveryType, createdAt, updatedAt,
+            storeId, storeName, customer, paymentMethod, paid,
+            paymentStatus, paymentStatusDetail, refunded, chargedBack } = data;
+
     res.json({
-      id,
-      status,
-      items,
-      total,
-      deliveryCost: deliveryCost || 0,
-      deliveryType,
-      createdAt,
-      updatedAt,
-      storeId,
-      storeName,
-      paymentMethod,
-      paid: !!paid,
+      id, status, items, total,
+      deliveryCost:        deliveryCost || 0,
+      deliveryType, createdAt, updatedAt,
+      storeId, storeName, paymentMethod,
+      paid:                !!paid,
+      paymentStatus,
+      paymentStatusDetail,
+      refunded:            !!refunded,
+      chargedBack:         !!chargedBack,
       customer: {
         firstName: customer?.firstName,
-        lastName: customer?.lastName
+        lastName:  customer?.lastName
       }
     });
   } catch (err) { next(err); }
@@ -165,35 +157,31 @@ router.get('/public/:id', async (req, res, next) => {
 // GET /api/orders/:id – requiere auth
 router.get('/:id', requireAuth, async (req, res, next) => {
   try {
-    const doc = await db.collection(COL).doc(req.params.id).get();
-    if (!doc.exists) return res.status(404).json({ error: 'Pedido no encontrado' });
-    res.json({ id: doc.id, ...doc.data() });
+    const data = await assertTenantOwnership(COL, req.params.id, req.tenantId);
+    if (data === null)  return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (data === false) return res.status(403).json({ error: 'Acceso denegado' });
+    res.json(data);
   } catch (err) { next(err); }
 });
 
-// PATCH /api/orders/:id/status – requiere auth + state machine
+// PATCH /api/orders/:id/status – requiere auth
 router.patch('/:id/status', requireAuth, async (req, res, next) => {
   try {
     const { status } = req.body;
     const ref = db.collection(COL).doc(req.params.id);
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'Pedido no encontrado' });
+
     const orderData = doc.data();
+    if (orderData.tenantId !== req.tenantId) return res.status(403).json({ error: 'Acceso denegado' });
+
     const currentStatus = orderData.status;
-
     if (FINAL_STATUSES.includes(currentStatus)) {
-      return res.status(400).json({
-        error: `El estado "${currentStatus}" es final y no puede modificarse`
-      });
+      return res.status(400).json({ error: `El estado "${currentStatus}" es final y no puede modificarse` });
     }
-
-    // despachado solo válido para envío a domicilio
     if (status === 'despachado' && orderData.deliveryType !== 'delivery') {
-      return res.status(400).json({
-        error: 'El estado "despachado" solo aplica a pedidos con envío a domicilio'
-      });
+      return res.status(400).json({ error: 'El estado "despachado" solo aplica a pedidos con envío a domicilio' });
     }
-
     const allowed = VALID_TRANSITIONS[currentStatus] || [];
     if (!allowed.includes(status)) {
       return res.status(400).json({
@@ -205,13 +193,14 @@ router.patch('/:id/status', requireAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PATCH /api/orders/:id/paid – público (llamado desde el frontend tras retorno de MercadoPago)
+// PATCH /api/orders/:id/paid – público (retorno MercadoPago)
 router.patch('/:id/paid', async (req, res, next) => {
   try {
     const { paid } = req.body;
     const ref = db.collection(COL).doc(req.params.id);
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (doc.data().tenantId !== req.tenantId) return res.status(403).json({ error: 'Acceso denegado' });
     await ref.update({ paid: !!paid, updatedAt: new Date().toISOString() });
     res.json({ id: req.params.id, paid: !!paid });
   } catch (err) { next(err); }

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { db } = require('../firebase');
 const { requireAdmin, requireAuth } = require('../middleware/auth');
+const { tenantQuery, assertTenantOwnership } = require('../utils/tenantQuery');
 
 const COL = 'stores';
 
@@ -80,12 +81,13 @@ function stripSensitive(store) {
 // GET /api/stores – público
 router.get('/', async (req, res, next) => {
   try {
-    const snap = await db.collection(COL).orderBy('order', 'asc').get();
+    const snap = await tenantQuery(COL, req.tenantId).get();
 
     if (snap.empty) {
       // Inicializar con los dos locales default
       const defaults = [
         {
+          tenantId: req.tenantId,
           name: 'Local Urquiza',
           address: 'Urquiza 2041',
           addressFull: 'Justo José de Urquiza 2041, X5001 Córdoba',
@@ -118,6 +120,7 @@ router.get('/', async (req, res, next) => {
           order: 2,
           active: true,
           isDefault: false,
+          tenantId: req.tenantId,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         }
@@ -141,7 +144,9 @@ router.get('/', async (req, res, next) => {
       return res.json(withWeather);
     }
 
-    const stores = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const stores = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
     const esFeriado = await getEsFeriado();
     const withWeather = await Promise.all(stores.map(async store => {
       const lat = store.lat ?? DEFAULT_LAT;
@@ -160,6 +165,7 @@ router.post('/', requireAdmin, async (req, res, next) => {
       scheduleWeekdays, scheduleSaturday, scheduleSunday, order, active } = req.body;
     if (!name) return res.status(400).json({ error: 'El nombre es requerido' });
     const store = {
+      tenantId: req.tenantId,
       name, address: address || '', addressFull: addressFull || address || '',
       phone: phone || '', mapUrl: mapUrl || '',
       mapImg: mapImg || 'https://i.postimg.cc/SnwrWdV5/mapa1.jpg',
@@ -194,10 +200,11 @@ router.post('/', requireAdmin, async (req, res, next) => {
 // PUT /api/stores/:id – solo admin
 router.put('/:id', requireAdmin, async (req, res, next) => {
   try {
-    const ref = db.collection(COL).doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ error: 'Local no encontrado' });
+    const existing = await assertTenantOwnership(COL, req.params.id, req.tenantId);
+    if (existing === null)  return res.status(404).json({ error: 'Local no encontrado' });
+    if (existing === false) return res.status(403).json({ error: 'Acceso denegado' });
 
+    const ref = db.collection(COL).doc(req.params.id);
     const allowed = [
       'name','address','addressFull','phone','mapUrl','mapImg','emoji',
       'scheduleWeekdays','scheduleSaturday','scheduleSunday','order','active','isDefault',
@@ -211,9 +218,9 @@ router.put('/:id', requireAdmin, async (req, res, next) => {
       if (req.body[key] !== undefined) update[key] = req.body[key];
     }
 
-    // Si se marca como default, quitar default a los demás
+    // Si se marca como default, quitar default a los demás del mismo tenant
     if (update.isDefault === true) {
-      const allSnap = await db.collection(COL).get();
+      const allSnap = await tenantQuery(COL, req.tenantId).get();
       const batch = db.batch();
       for (const d of allSnap.docs) {
         if (d.id !== req.params.id) batch.update(d.ref, { isDefault: false });
@@ -230,10 +237,11 @@ router.put('/:id', requireAdmin, async (req, res, next) => {
 // DELETE /api/stores/:id – solo admin
 router.delete('/:id', requireAdmin, async (req, res, next) => {
   try {
-    const ref = db.collection(COL).doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ error: 'Local no encontrado' });
-    await ref.delete();
+    const existing = await assertTenantOwnership(COL, req.params.id, req.tenantId);
+    if (existing === null)  return res.status(404).json({ error: 'Local no encontrado' });
+    if (existing === false) return res.status(403).json({ error: 'Acceso denegado' });
+
+    await db.collection(COL).doc(req.params.id).delete();
     res.json({ message: 'Local eliminado' });
   } catch (err) { next(err); }
 });

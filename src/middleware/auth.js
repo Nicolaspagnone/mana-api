@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || process.env.ADMIN_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET;
 
 function requireAdmin(req, res, next) {
   const auth = req.headers['authorization'];
@@ -9,8 +9,14 @@ function requireAdmin(req, res, next) {
   }
   try {
     const payload = jwt.verify(auth.slice(7), JWT_SECRET);
+
+    // El tenantId del token debe coincidir con el tenant resuelto por dominio
+    if (payload.tenantId !== req.tenantId) {
+      return res.status(403).json({ error: 'Acceso denegado: el usuario no pertenece a este tenant' });
+    }
+
     req.user = payload;
-    // Debe ser admin para usar rutas de gestión
+
     if (payload.role !== 'admin') {
       return res.status(403).json({ error: 'Requiere permisos de administrador' });
     }
@@ -30,6 +36,12 @@ function requireAuth(req, res, next) {
   }
   try {
     const payload = jwt.verify(auth.slice(7), JWT_SECRET);
+
+    // El tenantId del token debe coincidir con el tenant resuelto por dominio
+    if (payload.tenantId !== req.tenantId) {
+      return res.status(403).json({ error: 'Acceso denegado: el usuario no pertenece a este tenant' });
+    }
+
     req.user = payload;
     next();
   } catch (err) {

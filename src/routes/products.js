@@ -2,15 +2,16 @@ const express = require('express');
 const router = express.Router();
 const { db } = require('../firebase');
 const { requireAdmin } = require('../middleware/auth');
+const { tenantQuery, assertTenantOwnership } = require('../utils/tenantQuery');
 
 const COL = 'products';
 
 // GET /api/products – público
 router.get('/', async (req, res, next) => {
   try {
-    let query = db.collection(COL);
     const { categoryId, available, storeId } = req.query;
 
+    let query = tenantQuery(COL, req.tenantId);
     if (available === 'true') query = query.where('available', '==', true);
 
     const snap = await query.get();
@@ -36,9 +37,10 @@ router.get('/', async (req, res, next) => {
 // GET /api/products/:id – público
 router.get('/:id', async (req, res, next) => {
   try {
-    const doc = await db.collection(COL).doc(req.params.id).get();
-    if (!doc.exists) return res.status(404).json({ error: 'Producto no encontrado' });
-    res.json({ id: doc.id, ...doc.data() });
+    const data = await assertTenantOwnership(COL, req.params.id, req.tenantId);
+    if (data === null)  return res.status(404).json({ error: 'Producto no encontrado' });
+    if (data === false) return res.status(404).json({ error: 'Producto no encontrado' });
+    res.json(data);
   } catch (err) { next(err); }
 });
 
@@ -53,12 +55,14 @@ router.post('/', requireAdmin, async (req, res, next) => {
     if (!name || !price || !categoryId) {
       return res.status(400).json({ error: 'name, price y categoryId son requeridos' });
     }
-    const catDoc = await db.collection('categories').doc(categoryId).get();
-    if (!catDoc.exists) return res.status(400).json({ error: 'Categoría no encontrada' });
+    // Verify category belongs to this tenant
+    const catData = await assertTenantOwnership('categories', categoryId, req.tenantId);
+    if (!catData) return res.status(400).json({ error: 'Categoría no encontrada' });
 
     const discount = Math.min(50, Math.max(0, Number(discountPct) || 0));
 
     const docRef = await db.collection(COL).add({
+      tenantId: req.tenantId,
       name, description: description || '', price: Number(price),
       categoryId, img, popular, available, order: Number(order),
       discountPct: discount,
@@ -73,10 +77,11 @@ router.post('/', requireAdmin, async (req, res, next) => {
 // PUT /api/products/:id – admin
 router.put('/:id', requireAdmin, async (req, res, next) => {
   try {
-    const ref = db.collection(COL).doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ error: 'Producto no encontrado' });
+    const existing = await assertTenantOwnership(COL, req.params.id, req.tenantId);
+    if (existing === null)  return res.status(404).json({ error: 'Producto no encontrado' });
+    if (existing === false) return res.status(403).json({ error: 'Acceso denegado' });
 
+    const ref = db.collection(COL).doc(req.params.id);
     const allowed = ['name','description','price','categoryId','img','popular','available','order','discountPct','storeIds','costo'];
     const update = { updatedAt: new Date().toISOString() };
     for (const key of allowed) {
@@ -89,21 +94,23 @@ router.put('/:id', requireAdmin, async (req, res, next) => {
       }
     }
     if (update.categoryId) {
-      const catDoc = await db.collection('categories').doc(update.categoryId).get();
-      if (!catDoc.exists) return res.status(400).json({ error: 'Categoría no encontrada' });
+      const catData = await assertTenantOwnership('categories', update.categoryId, req.tenantId);
+      if (!catData) return res.status(400).json({ error: 'Categoría no encontrada' });
     }
     await ref.update(update);
-    res.json({ id: req.params.id, ...doc.data(), ...update });
+    res.json({ id: req.params.id, ...existing, ...update });
   } catch (err) { next(err); }
 });
 
 // PATCH /api/products/:id/toggle – admin
 router.patch('/:id/toggle', requireAdmin, async (req, res, next) => {
   try {
+    const existing = await assertTenantOwnership(COL, req.params.id, req.tenantId);
+    if (existing === null)  return res.status(404).json({ error: 'Producto no encontrado' });
+    if (existing === false) return res.status(403).json({ error: 'Acceso denegado' });
+
     const ref = db.collection(COL).doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ error: 'Producto no encontrado' });;
-    const newVal = !doc.data().available;
+    const newVal = !existing.available;
     await ref.update({ available: newVal, updatedAt: new Date().toISOString() });
     res.json({ id: req.params.id, available: newVal });
   } catch (err) { next(err); }
@@ -112,10 +119,11 @@ router.patch('/:id/toggle', requireAdmin, async (req, res, next) => {
 // DELETE /api/products/:id – admin
 router.delete('/:id', requireAdmin, async (req, res, next) => {
   try {
-    const ref = db.collection(COL).doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ error: 'Producto no encontrado' });
-    await ref.delete();
+    const existing = await assertTenantOwnership(COL, req.params.id, req.tenantId);
+    if (existing === null)  return res.status(404).json({ error: 'Producto no encontrado' });
+    if (existing === false) return res.status(403).json({ error: 'Acceso denegado' });
+
+    await db.collection(COL).doc(req.params.id).delete();
     res.json({ message: 'Producto eliminado' });
   } catch (err) { next(err); }
 });

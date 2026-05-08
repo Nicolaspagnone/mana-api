@@ -1,0 +1,56 @@
+{
+  "tenantId": "tenant_mana",
+  "startedAt": "2026-05-07T18:30:54.661Z",
+  "dryRun": false,
+  "collections": {
+    "products": [
+      "2M4ihTrNGdQMWb7Zvh7N",
+      "2m46OOTPUNegp0B12ayg",
+      "6pQnQBKOr7JdrG5uvlR9",
+      "Ne2347gWCFIIvNJjuMAJ",
+      "SJ2XIQL6ckhTWaHkRSyM",
+      "Xy12akacs2Zvt8a6U3zX",
+      "ZMh1EYapRC5tOwETxTxR",
+      "ag3tnmozOKKnTOAd3q56",
+      "eRKEmHtbtnerDs04rAMz",
+      "lZyGEfRypelId3H37O7u",
+      "nVjaavwslyCW4llzuc1l"
+    ],
+    "categories": [
+      "CdVA6kzpOnKN78MYabOK",
+      "SD9X7JY38FOOoigQCeGg",
+      "UOAXqNi5bsCj1VfqwFKD"
+    ],
+    "stores": [
+      "2puUtScbhtuTMoord9rz",
+      "kuYCcwi1UpkyA43MVtYT"
+    ],
+    "orders": [
+      "19gr5jcW6v4rSKUJHf3A",
+      "3tmdXz63Klnt2wpTvde5",
+      "3w7JV3VxhRfXjeA0OIOX",
+      "9GwpehMjCHWnBWlPsJap",
+      "9ORFXVNchUZR3kTKxuyb",
+      "Gf6seqBcG1Cs9ev6aj6h",
+      "HZKy0FSDLYmd19vodEfb",
+      "Kz6dHiyX0RccknsCT8l9",
+      "OwA2PWBa3u2uDw0xcDsq",
+      "PIoawdyGVVa1XGyR6T5E",
+      "TLCMyIn26v5oojNk8Vup",
+      "YayJDePwz9Wibtw32gZy",
+      "ZgMJz6T9TgNjDIjPr0ZR",
+      "cShh4UzIwHzmYirax9eP",
+      "f2FprgIi2yoJitDDiCSU",
+      "hENiDVHTtoXtIrHhD315",
+      "hjf9xCVJWM9H32XHPNNo",
+      "n4zoAK40SWmfnlBWZSwm",
+      "oE4w9wZewJ47kYtmKcrL",
+      "xsJVd9qAs96HX9IGex7r"
+    ],
+    "cpanel_users": [
+      "X55EerrPUX9jGhP1iLul",
+      "qLITtM9bXjjVhyczcNaG"
+    ]
+  },
+  "completedAt": "2026-05-07T18:31:02.797Z"
+}

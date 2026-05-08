@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { db } = require('../firebase');
 const { requireAdmin } = require('../middleware/auth');
+const { tenantQuery, assertTenantOwnership } = require('../utils/tenantQuery');
 
 const COL = 'cpanel_users';
 const ALL_PERMISSIONS = ['dashboard', 'categorias', 'productos', 'pedidos', 'usuarios'];
@@ -9,7 +10,7 @@ const ALL_PERMISSIONS = ['dashboard', 'categorias', 'productos', 'pedidos', 'usu
 // GET /api/users – admin
 router.get('/', requireAdmin, async (req, res, next) => {
   try {
-    const snap = await db.collection(COL).orderBy('createdAt', 'asc').get();
+    const snap = await tenantQuery(COL, req.tenantId).get();
     const users = snap.docs.map(d => {
       const data = d.data();
       const { password, ...safe } = data; // never expose password
@@ -26,16 +27,17 @@ router.post('/', requireAdmin, async (req, res, next) => {
     if (!username || !password) {
       return res.status(400).json({ error: 'username y password son requeridos' });
     }
-    // Check username unique
-    const existing = await db.collection(COL).where('username', '==', username).limit(1).get();
+    // Check username unique within this tenant
+    const existing = await tenantQuery(COL, req.tenantId).where('username', '==', username).limit(1).get();
     if (!existing.empty) {
       return res.status(400).json({ error: 'El nombre de usuario ya existe' });
     }
     // Validate permissions
     const validPerms = permissions.filter(p => ALL_PERMISSIONS.includes(p));
     const userData = {
+      tenantId: req.tenantId,
       username,
-      password, // plain text (same as existing ADMIN_SECRET pattern)
+      password,
       role: role === 'admin' ? 'admin' : 'operator',
       permissions: validPerms,
       storeId: storeId || null,
@@ -50,10 +52,11 @@ router.post('/', requireAdmin, async (req, res, next) => {
 // PUT /api/users/:id – admin – editar usuario
 router.put('/:id', requireAdmin, async (req, res, next) => {
   try {
-    const ref = db.collection(COL).doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ error: 'Usuario no encontrado' });
+    const existing = await assertTenantOwnership(COL, req.params.id, req.tenantId);
+    if (existing === null)  return res.status(404).json({ error: 'Usuario no encontrado' });
+    if (existing === false) return res.status(403).json({ error: 'Acceso denegado' });
 
+    const ref = db.collection(COL).doc(req.params.id);
     const update = { updatedAt: new Date().toISOString() };
     if (req.body.password) update.password = req.body.password;
     if (req.body.role) update.role = req.body.role === 'admin' ? 'admin' : 'operator';
@@ -74,10 +77,11 @@ router.put('/:id', requireAdmin, async (req, res, next) => {
 // DELETE /api/users/:id – admin
 router.delete('/:id', requireAdmin, async (req, res, next) => {
   try {
-    const ref = db.collection(COL).doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ error: 'Usuario no encontrado' });
-    await ref.delete();
+    const existing = await assertTenantOwnership(COL, req.params.id, req.tenantId);
+    if (existing === null)  return res.status(404).json({ error: 'Usuario no encontrado' });
+    if (existing === false) return res.status(403).json({ error: 'Acceso denegado' });
+
+    await db.collection(COL).doc(req.params.id).delete();
     res.json({ message: 'Usuario eliminado' });
   } catch (err) { next(err); }
 });

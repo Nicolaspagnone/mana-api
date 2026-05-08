@@ -56,6 +56,10 @@ router.post('/mercadopago/preference', async (req, res, next) => {
       return res.status(400).json({ error: 'Faltan datos: orderId y total son requeridos' });
     }
 
+    if (req.tenant?.features?.mercadopago === false) {
+      return res.status(403).json({ error: 'MercadoPago no está habilitado para este negocio' });
+    }
+
     // Leer storeId del pedido para obtener las credenciales del local correcto
     const orderDoc = await db.collection('orders').doc(orderId).get();
     const storeId = orderDoc.exists ? orderDoc.data().storeId : null;
@@ -66,6 +70,7 @@ router.post('/mercadopago/preference', async (req, res, next) => {
     }
 
     const baseUrl = returnUrl || 'https://manaempanadas.app';
+    const tenantId = req.tenantId;
 
     const preference = {
       items: [{
@@ -80,8 +85,8 @@ router.post('/mercadopago/preference', async (req, res, next) => {
         failure: `${baseUrl}/pedido/estado`,
         pending: `${baseUrl}/pedido/estado`
       },
-      notification_url: storeId && process.env.BACKEND_URL
-        ? `${process.env.BACKEND_URL}/api/payments/mercadopago/webhook/${storeId}`
+      notification_url: storeId && process.env.BACKEND_URL && tenantId
+        ? `${process.env.BACKEND_URL}/api/payments/mercadopago/webhook/${tenantId}/${storeId}`
         : undefined
     };
 
@@ -163,20 +168,19 @@ router.post('/mercadopago/retry-check', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ── POST /api/payments/mercadopago/webhook/:storeId ───────
-router.post('/mercadopago/webhook/:storeId', async (req, res) => {
+// ── POST /api/payments/mercadopago/webhook/:tenantId/:storeId ───────
+router.post('/mercadopago/webhook/:tenantId/:storeId', async (req, res) => {
   res.sendStatus(200); // Responder inmediatamente
 
   try {
-  
+
     if (req.body.type !== 'payment') return;
 
     const paymentId = req.body?.data?.id;
     if (!paymentId) return;
 
-    const { storeId } = req.params;
-    console.log(`Este es un pago para el local ${storeId}`);
-    console.log(`[MP Webhook] Recibido evento payment - storeId: ${storeId}:`, JSON.stringify(req.body));
+    const { tenantId, storeId } = req.params;
+    console.log(`[MP Webhook] Recibido evento payment - tenantId: ${tenantId}, storeId: ${storeId}:`, JSON.stringify(req.body));
 
     const { accessToken } = await getMpCredentials(storeId);
     if (!accessToken) {

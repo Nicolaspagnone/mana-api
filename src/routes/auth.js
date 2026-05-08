@@ -1,8 +1,8 @@
 const express = require('express');
-const router = express.Router();
+const router  = express.Router();
 const rateLimit = require('express-rate-limit');
-const jwt = require('jsonwebtoken');
-const { db } = require('../firebase');
+const jwt       = require('jsonwebtoken');
+const { db }    = require('../firebase');
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -10,7 +10,7 @@ const loginLimiter = rateLimit({
   message: { error: 'Demasiados intentos de login.' }
 });
 
-const JWT_SECRET = process.env.JWT_SECRET || process.env.ADMIN_SECRET;
+const JWT_SECRET   = process.env.JWT_SECRET;
 const SESSION_HOURS = 8;
 
 // POST /api/auth/login
@@ -21,39 +21,32 @@ router.post('/login', loginLimiter, async (req, res) => {
   const uname = username || 'admin';
 
   try {
+    // Buscar usuario filtrando por tenantId — sin mezclar datos entre tenants
     const snap = await db.collection('cpanel_users')
       .where('username', '==', uname)
+      .where('tenantId', '==', req.tenantId)
       .limit(1)
       .get();
 
-    let user;
+    if (snap.empty) {
+      return res.status(403).json({ error: 'Usuario o contraseña incorrectos' });
+    }
 
-    if (!snap.empty) {
-      const doc = snap.docs[0];
-      user = { id: doc.id, ...doc.data() };
-      if (user.password !== password) {
-        return res.status(403).json({ error: 'Usuario o contraseña incorrectos' });
-      }
-    } else if (uname === 'admin' && password === process.env.ADMIN_SECRET) {
-      user = {
-        id: 'admin',
-        username: 'admin',
-        role: 'admin',
-        permissions: ['dashboard', 'categorias', 'productos', 'pedidos', 'usuarios'],
-        storeId: '',
-        storeName: ''
-      };
-    } else {
+    const doc  = snap.docs[0];
+    const user = { id: doc.id, ...doc.data() };
+
+    if (user.password !== password) {
       return res.status(403).json({ error: 'Usuario o contraseña incorrectos' });
     }
 
     const payload = {
-      userId: user.id,
-      username: user.username,
-      role: user.role || 'operator',
+      userId:      user.id,
+      username:    user.username,
+      role:        user.role        || 'operator',
       permissions: user.permissions || ['pedidos'],
-      storeId: user.storeId || '',
-      storeName: user.storeName || ''
+      storeId:     user.storeId     || '',
+      storeName:   user.storeName   || '',
+      tenantId:    req.tenantId     // ← incluido en el JWT para validación posterior
     };
 
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: `${SESSION_HOURS}h` });
